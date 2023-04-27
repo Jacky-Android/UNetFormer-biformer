@@ -23,8 +23,11 @@ class UNetFormer(nn.Module):
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
     def forward(self, x):
-        h, w = x.size()[-2:]
-        res1, res2, res3, res4 = self.backbone(x)
         
-        x = self.decoder(res1, res2, res3, res4, h, w)
+        res  = self.backbone(x)
+    
+        #res1, res2, res3, res4 = self.backbone(x)
+        h, w = x.size()[-2:]
+       
+        x = self.decoder(res,h,w)
         return x
