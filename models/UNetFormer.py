@@ -1,11 +1,12 @@
 
+
 import timm
 import torch
 import torch.nn as nn
 from .Decoder import Decoder
 class UNetFormer(nn.Module):
     def __init__(self,
-                 decode_channels=64,
+                 decode_channels=32,
                  dropout=0.1,
                  backbone_name='resnet18',
                  pretrained=True,
@@ -24,9 +25,6 @@ class UNetFormer(nn.Module):
     def forward(self, x):
         h, w = x.size()[-2:]
         res1, res2, res3, res4 = self.backbone(x)
-        if self.training:
-            x, ah = self.decoder(res1, res2, res3, res4, h, w)
-            return x, ah
-        else:
-            x = self.decoder(res1, res2, res3, res4, h, w)
+        
+        x = self.decoder(res1, res2, res3, res4, h, w)
         return x
