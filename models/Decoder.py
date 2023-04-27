@@ -61,24 +61,24 @@ class Mlp(nn.Module):
 
 class Block(nn.Module):
     def __init__(self, dim=256, num_heads=16,  mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.BatchNorm2d, window_size=8):
+                 drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.LayerNorm, window_size=8,topk = 4):
         super().__init__()
-        self.norm1 = norm_layer(dim)
-        self.attn = BiLevelRoutingAttention(dim=dim,num_heads=num_heads,n_win=window_size,param_attention="qkv",auto_pad=True)
+        self.norm1 = norm_layer(dim, eps=1e-6)
+        self.attn = BiLevelRoutingAttention(dim=dim,num_heads=num_heads,n_win=window_size,param_attention="qkv",auto_pad=True,topk=topk,side_dwconv=5)
         #self.attn = GlobalLocalAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
-
+        self.gamma1 = nn.Parameter(-1 * torch.ones((dim)), requires_grad=True)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer, drop=drop)
-        self.norm2 = norm_layer(dim)
+        self.norm2 = norm_layer(dim, eps=1e-6)
 
 
     def forward(self, x):
-         
-        att = self.attn(self.norm1(x).permute(0, 2, 3, 1))# NHWC
-        x = x + self.drop_path(att.permute(0,3,1,2)) #NCHW
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
-
+        x = x.permute(0, 2, 3, 1)# NHWC
+        att = self.attn(self.norm1(x))
+        x = x + self.drop_path(self.gamma1*att) 
+        x = x.permute(0, 3,1,2) + self.drop_path(self.mlp(self.norm2(x).permute(0, 3,1,2)))#NCHW
+        
         '''x = x + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))'''
         return x
@@ -125,16 +125,16 @@ class Decoder(nn.Module):
                  decode_channels=64,
                  dropout=0.1,
                  window_size=8,
-                 num_classes=6):
+                 num_classes=6,topks=(1, 4, 16, -2)):
         super(Decoder, self).__init__()
 
         self.pre_conv = ConvBN(encoder_channels[-1], decode_channels, kernel_size=1)
-        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b4 = Block(dim=decode_channels, num_heads=encoder_channels[-1]//decode_channels, window_size=window_size,topk=topks[2])
 
-        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b3 = Block(dim=decode_channels, num_heads=encoder_channels[-2]//decode_channels, window_size=window_size,topk=topks[1])
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b2 = Block(dim=decode_channels, num_heads=encoder_channels[-3]//decode_channels, window_size=window_size,topk=topks[0])
         self.p2 = WF(encoder_channels[-3], decode_channels)
         if self.training:
             self.up4 = nn.UpsamplingBilinear2d(scale_factor=4)
@@ -148,26 +148,7 @@ class Decoder(nn.Module):
                                                Conv(decode_channels, num_classes, kernel_size=1))
 
     def forward(self, res1, res2, res3, res4, h, w):
-        if self.training:
-            x = self.b4(self.pre_conv(res4))
-            h4 = self.up4(x)
-
-            x = self.p3(x, res3)
-            x = self.b3(x)
-            h3 = self.up3(x)
-
-            x = self.p2(x, res2)
-            x = self.b2(x)
-            h2 = x
-            x = self.p1(x, res1)
-            x = self.segmentation_head(x)
-            x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
-
-            ah = h4 + h3 + h2
-            ah = self.aux_head(ah, h, w)
-
-            return x, ah
-        else:
+        
            
             x = self.b4(self.pre_conv(res4))
             x = self.p3(x, res3)
@@ -181,4 +162,5 @@ class Decoder(nn.Module):
             x = self.segmentation_head(x)
             x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
 
+          
             return x
