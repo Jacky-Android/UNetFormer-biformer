@@ -9,20 +9,7 @@ from .Biformer import BiLevelRoutingAttention
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import timm
 
-class AuxHead(nn.Module):
 
-    def __init__(self, in_channels=64, num_classes=8):
-        super().__init__()
-        self.conv = ConvBNReLU(in_channels, in_channels)
-        self.drop = nn.Dropout(0.1)
-        self.conv_out = Conv(in_channels, num_classes, kernel_size=1)
-
-    def forward(self, x, h, w):
-        feat = self.conv(x)
-        feat = self.drop(feat)
-        feat = self.conv_out(feat)
-        feat = F.interpolate(feat, size=(h, w), mode='bilinear', align_corners=False)
-        return feat
     
 class WF(nn.Module):
     def __init__(self, in_channels=128, decode_channels=128, eps=1e-8):
@@ -41,22 +28,19 @@ class WF(nn.Module):
         x = self.post_conv(x)
         return x
 
-class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU6, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Conv2d(in_features, hidden_features, 1, 1, 0, bias=True)
-        self.act = act_layer()
-        self.fc2 = nn.Conv2d(hidden_features, out_features, 1, 1, 0, bias=True)
-        self.drop = nn.Dropout(drop, inplace=True)
+class DWConv(nn.Module):
+    def __init__(self, dim=768):
+        super(DWConv, self).__init__()
+        self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, bias=True, groups=dim)
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
+        """
+        x: NHWC tensor
+        """
+        x = x.permute(0, 3, 1, 2) #NCHW
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) #NHWC
+
         return x
 
 class Block(nn.Module):
@@ -64,20 +48,27 @@ class Block(nn.Module):
                  drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.LayerNorm, window_size=8,topk = 4):
         super().__init__()
         self.norm1 = norm_layer(dim, eps=1e-6)
-        self.attn = BiLevelRoutingAttention(dim=dim,num_heads=num_heads,n_win=window_size,param_attention="qkv",auto_pad=True,topk=topk,side_dwconv=5)
+        self.attn = BiLevelRoutingAttention(dim=dim,num_heads=num_heads,n_win=window_size,param_attention="qkv",
+                                            auto_pad=False,topk=topk,side_dwconv=5)
         #self.attn = GlobalLocalAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
         self.gamma1 = nn.Parameter(-1 * torch.ones((dim)), requires_grad=True)
+        self.gamma2 = nn.Parameter(-1 * torch.ones((dim)), requires_grad=True)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer, drop=drop)
+        mlp_dwconv = False
+        self.mlp = self.mlp = nn.Sequential(nn.Linear(dim, int(mlp_ratio*dim)),
+                                 DWConv(int(mlp_ratio*dim)) if mlp_dwconv else nn.Identity(),
+                                 nn.GELU(),
+                                 nn.Linear(int(mlp_ratio*dim), dim)
+                                )
         self.norm2 = norm_layer(dim, eps=1e-6)
 
 
     def forward(self, x):
         x = x.permute(0, 2, 3, 1)# NHWC
-        att = self.attn(self.norm1(x))
-        x = x + self.drop_path(self.gamma1*att) 
-        x = x.permute(0, 3,1,2) + self.drop_path(self.mlp(self.norm2(x).permute(0, 3,1,2)))#NCHW
+        x = x + self.drop_path(self.gamma1*self.attn(self.norm1(x))) 
+        x = x + self.drop_path(self.gamma2 * self.mlp(self.norm2(x)))
+        x = x.permute(0, 3,1,2) 
+        #x = x.permute(0, 3,1,2) + self.drop_path(self.mlp(self.norm2(x).permute(0, 3,1,2)))#NCHW
         
         '''x = x + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))'''
@@ -136,10 +127,7 @@ class Decoder(nn.Module):
 
         self.b2 = Block(dim=decode_channels, num_heads=encoder_channels[-3]//decode_channels, window_size=window_size,topk=topks[0])
         self.p2 = WF(encoder_channels[-3], decode_channels)
-        if self.training:
-            self.up4 = nn.UpsamplingBilinear2d(scale_factor=4)
-            self.up3 = nn.UpsamplingBilinear2d(scale_factor=2)
-            self.aux_head = AuxHead(decode_channels, num_classes)
+        
 
         self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
 
@@ -147,9 +135,10 @@ class Decoder(nn.Module):
                                                nn.Dropout2d(p=dropout, inplace=True),
                                                Conv(decode_channels, num_classes, kernel_size=1))
 
-    def forward(self, res1, res2, res3, res4, h, w):
+    def forward(self, res,h,w):
         
-           
+            res1, res2, res3, res4 = res
+            
             x = self.b4(self.pre_conv(res4))
             x = self.p3(x, res3)
             x = self.b3(x)
@@ -162,5 +151,4 @@ class Decoder(nn.Module):
             x = self.segmentation_head(x)
             x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
 
-          
             return x
