@@ -84,11 +84,8 @@ class FeatureRefinementHead(nn.Module):
         self.eps = 1e-8
         self.post_conv = ConvBNReLU(decode_channels, decode_channels, kernel_size=3)
 
-        '''self.pa = nn.Sequential(nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
-                                nn.Sigmoid())'''
-        self.norm1 = nn.LayerNorm(32, eps=1e-6)
-        self.pa = BiLevelRoutingAttention(dim=32,num_heads=4,n_win=8,param_attention="qkv",
-                                            auto_pad=False,topk=4,side_dwconv=5)
+        self.pa = nn.Sequential(nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),nn.Sigmoid())
+        
         self.ca = nn.Sequential(nn.AdaptiveAvgPool2d(1),
                                 Conv(decode_channels, decode_channels//16, kernel_size=1),
                                 nn.ReLU6(),
@@ -106,8 +103,7 @@ class FeatureRefinementHead(nn.Module):
         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
         x = self.post_conv(x)
         shortcut = self.shortcut(x)
-        pa = x+self.pa(self.norm1(x.permute(0, 2, 3, 1))).permute(0,3,1,2)
-        pa = pa* x
+        pa = self.pa(x)* x
         ca = self.ca(x) * x
         x = pa + ca
         x = self.proj(x) + shortcut
