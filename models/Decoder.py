@@ -87,7 +87,7 @@ class FeatureRefinementHead(nn.Module):
         '''self.pa = nn.Sequential(nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
                                 nn.Sigmoid())'''
         self.norm1 = nn.LayerNorm(32, eps=1e-6)
-        self.pa = BiLevelRoutingAttention(dim=32,num_heads=8,n_win=8,param_attention="qkv",
+        self.pa = BiLevelRoutingAttention(dim=32,num_heads=4,n_win=8,param_attention="qkv",
                                             auto_pad=False,topk=4,side_dwconv=5)
         self.ca = nn.Sequential(nn.AdaptiveAvgPool2d(1),
                                 Conv(decode_channels, decode_channels//16, kernel_size=1),
