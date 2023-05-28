@@ -119,7 +119,7 @@ class FeatureRefinementHead(nn.Module):
 class Decoder(nn.Module):
     def __init__(self,
                  encoder_channels=(64, 128, 256, 512),
-                 decode_channels=[32, 64, 128],
+                 decode_channels=(32, 64, 128),
                  dropout=0.1,
                  window_size=8,
                  num_classes=6,topks=(1, 4, 16, -2)):
