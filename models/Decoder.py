@@ -79,13 +79,16 @@ class FeatureRefinementHead(nn.Module):
     def __init__(self, in_channels=64, decode_channels=64):
         super().__init__()
         self.pre_conv = Conv(in_channels, decode_channels, kernel_size=1)
-
+        #self.pre_conv = 
         self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.eps = 1e-8
         self.post_conv = ConvBNReLU(decode_channels, decode_channels, kernel_size=3)
 
-        self.pa = nn.Sequential(nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
-                                nn.Sigmoid())
+        '''self.pa = nn.Sequential(nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
+                                nn.Sigmoid())'''
+        self.norm1 = nn.LayerNorm(32, eps=1e-6)
+        self.pa = BiLevelRoutingAttention(dim=32,num_heads=8,n_win=8,param_attention="qkv",
+                                            auto_pad=False,topk=4,side_dwconv=5)
         self.ca = nn.Sequential(nn.AdaptiveAvgPool2d(1),
                                 Conv(decode_channels, decode_channels//16, kernel_size=1),
                                 nn.ReLU6(),
@@ -103,7 +106,9 @@ class FeatureRefinementHead(nn.Module):
         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
         x = self.post_conv(x)
         shortcut = self.shortcut(x)
-        pa = self.pa(x) * x
+        
+        pa = x+self.pa(self.norm1(x.permute(0, 2, 3, 1))).permute(0,3,1,2)
+        pa = pa* x
         ca = self.ca(x) * x
         x = pa + ca
         x = self.proj(x) + shortcut
@@ -114,19 +119,19 @@ class FeatureRefinementHead(nn.Module):
 class Decoder(nn.Module):
     def __init__(self,
                  encoder_channels=(64, 128, 256, 512),
-                 decode_channels=64,
+                 decode_channels=[32, 64, 128],
                  dropout=0.1,
                  window_size=8,
                  num_classes=6,topks=(1, 4, 16, -2)):
         super(Decoder, self).__init__()
         #print(encoder_channels,decode_channels,encoder_channels[-1]//decode_channels,encoder_channels[-2]//decode_channels,encoder_channels[-3]//decode_channels)
         self.pre_conv = ConvBN(encoder_channels[-1], decode_channels, kernel_size=1)
-        self.b4 = Block(dim=decode_channels, num_heads=encoder_channels[-1]//decode_channels, window_size=window_size,topk=topks[2])
+        self.b4 = Block(dim=decode_channels[-1], num_heads=encoder_channels[-1]//decode_channels, window_size=window_size,topk=topks[2])
 
-        self.b3 = Block(dim=decode_channels, num_heads=encoder_channels[-2]//decode_channels, window_size=window_size,topk=topks[1])
+        self.b3 = Block(dim=decode_channels[-2], num_heads=encoder_channels[-2]//decode_channels, window_size=window_size,topk=topks[1])
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = Block(dim=decode_channels, num_heads=encoder_channels[-3]//decode_channels, window_size=window_size,topk=topks[0])
+        self.b2 = Block(dim=decode_channels[-3], num_heads=encoder_channels[-3]//decode_channels, window_size=window_size,topk=topks[0])
         self.p2 = WF(encoder_channels[-3], decode_channels)
         
 
