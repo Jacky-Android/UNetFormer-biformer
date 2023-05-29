@@ -123,12 +123,12 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         #print(encoder_channels,decode_channels,encoder_channels[-1]//decode_channels,encoder_channels[-2]//decode_channels,encoder_channels[-3]//decode_channels)
         self.pre_conv = ConvBN(encoder_channels[-1], decode_channels, kernel_size=1)
-        self.b4 = Block(dim=decode_channels, num_heads=encoder_channels[-1]//decode_channels, window_size=window_size,topk=topks[2])
+        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=window_size,topk=topks[2])
 
-        self.b3 = Block(dim=decode_channels, num_heads=encoder_channels[-2]//decode_channels, window_size=window_size,topk=topks[1])
+        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=window_size,topk=topks[1])
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = Block(dim=decode_channels, num_heads=encoder_channels[-3]//decode_channels, window_size=window_size,topk=topks[0])
+        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size,topk=topks[0])
         self.p2 = WF(encoder_channels[-3], decode_channels)
         
 
